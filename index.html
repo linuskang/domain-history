@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>is-a.dev domain history</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 16px/1.5 system-ui, sans-serif;
+      --bg: #fff;
+      --fg: #24292f;
+      --muted: #57606a;
+      --border: #d0d7de;
+      --panel: #f6f8fa;
+      --link: #0969da;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --border: #30363d; --panel: #161b22; --link: #58a6ff; }
+    }
+    body { background: var(--bg); color: var(--fg); margin: 0; }
+    main { max-width: 900px; margin: 0 auto; padding: 3rem 1rem; }
+    h1 { margin-bottom: .25rem; }
+    .muted, time { color: var(--muted); }
+    form { display: flex; gap: .5rem; margin: 2rem 0 1rem; }
+    input, button { border: 1px solid var(--border); border-radius: 6px; font: inherit; padding: .6rem .75rem; }
+    input { background: var(--bg); color: var(--fg); flex: 1; min-width: 0; }
+    button { background: var(--panel); color: var(--fg); cursor: pointer; }
+    button[type="submit"] { background: var(--link); border-color: var(--link); color: white; }
+    button:disabled { cursor: wait; opacity: .65; }
+    .status { min-height: 1.5rem; color: var(--muted); }
+    .error { color: #cf222e; }
+    .commit { border: 1px solid var(--border); border-radius: 6px; margin: .75rem 0; overflow: hidden; }
+    .commit-header { align-items: center; display: flex; gap: .75rem; padding: .85rem 1rem; }
+    .commit-header button { margin-left: auto; }
+    .subject { font-weight: 600; }
+    .sha { color: var(--link); font-family: ui-monospace, monospace; text-decoration: none; }
+    pre { background: var(--panel); margin: 0; max-height: 32rem; overflow: auto; padding: 1rem; white-space: pre-wrap; }
+    .details { border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>is-a.dev domain history</h1>
+    <p class="muted">Search commits and file changes in <code>is-a-dev/register</code>.</p>
+    <form id="search-form">
+      <input id="domain" name="domain" placeholder="example.is-a.dev" autocomplete="off" required>
+      <button type="submit">Search</button>
+    </form>
+    <div id="status" class="status" role="status"></div>
+    <section id="results" aria-live="polite"></section>
+  </main>
+  <script>
+    const API = "https://api.github.com/repos/is-a-dev/register";
+    const form = document.querySelector("#search-form");
+    const input = document.querySelector("#domain");
+    const status = document.querySelector("#status");
+    const results = document.querySelector("#results");
+
+    function normalizeDomain(value) {
+      let domain = value.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].replace(/\.$/, "");
+      if (!/^[a-z0-9][a-z0-9.-]*$/.test(domain)) throw new Error("Enter a valid domain.");
+      return domain;
+    }
+
+    async function github(url) {
+      const response = await fetch(url, { headers: { Accept: "application/vnd.github+json" } });
+      if (!response.ok) {
+        if (response.status === 404) throw new Error("No domain file or commits were found.");
+        if (response.status === 403) throw new Error("GitHub API rate limit reached. Try again later.");
+        throw new Error(`GitHub API request failed (${response.status}).`);
+      }
+      return response.json();
+    }
+
+    async function allCommits(path) {
+      const commits = [];
+      for (let page = 1; ; page++) {
+        const batch = await github(`${API}/commits?path=${encodeURIComponent(path)}&per_page=100&page=${page}`);
+        commits.push(...batch);
+        if (batch.length < 100) return commits;
+      }
+    }
+
+    function renderCommit(commit, path) {
+      const article = document.createElement("article");
+      article.className = "commit";
+      const header = document.createElement("div");
+      header.className = "commit-header";
+      const text = document.createElement("div");
+      const subject = document.createElement("div");
+      subject.className = "subject";
+      subject.textContent = commit.commit.message.split("\n")[0];
+      const metadata = document.createElement("div");
+      metadata.className = "muted";
+      const date = new Date(commit.commit.author.date).toLocaleString();
+      metadata.textContent = `${commit.commit.author.name} · ${date}`;
+      text.append(subject, metadata);
+      const link = document.createElement("a");
+      link.className = "sha";
+      link.href = commit.html_url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = commit.sha.slice(0, 7);
+      const changes = document.createElement("button");
+      changes.type = "button";
+      changes.textContent = "Show changes";
+      const details = document.createElement("div");
+      details.className = "details";
+      details.hidden = true;
+      changes.addEventListener("click", async () => {
+        if (!details.hasChildNodes()) {
+          changes.disabled = true;
+          changes.textContent = "Loading…";
+          try {
+            const detail = await github(`${API}/commits/${commit.sha}`);
+            const file = detail.files?.find(item => item.filename === path);
+            const pre = document.createElement("pre");
+            pre.textContent = file?.patch || "No textual patch is available for this change.";
+            details.append(pre);
+          } catch (error) {
+            const message = document.createElement("p");
+            message.className = "error";
+            message.textContent = error.message;
+            details.append(message);
+          } finally {
+            changes.disabled = false;
+            changes.textContent = "Hide changes";
+          }
+        } else {
+          changes.textContent = details.hidden ? "Hide changes" : "Show changes";
+        }
+        details.hidden = !details.hidden;
+      });
+      header.append(text, link, changes);
+      article.append(header, details);
+      return article;
+    }
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      results.replaceChildren();
+      status.className = "status";
+      let domain;
+      try {
+        domain = normalizeDomain(input.value);
+        const path = `domains/${domain}.json`;
+        status.textContent = "Loading commit history…";
+        const commits = await allCommits(path);
+        status.textContent = `${commits.length} commit${commits.length === 1 ? "" : "s"} for ${domain}`;
+        if (!commits.length) return;
+        commits.forEach(commit => results.append(renderCommit(commit, path)));
+      } catch (error) {
+        status.className = "status error";
+        status.textContent = error.message;
+      }
+    });
+  </script>
+</body>
+</html>
