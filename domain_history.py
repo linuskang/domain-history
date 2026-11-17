@@ -60,34 +60,55 @@ def normalize_domain(value: str) -> str:
 
 
 def domain_path(domain: str) -> str:
-    return f"domains/{normalize_domain(domain)}.json"
+    return f"domains/{domain_name(domain)}.json"
+
+
+def domain_name(domain: str) -> str:
+    value = normalize_domain(domain)
+    suffix = ".is-a.dev"
+    return value[: -len(suffix)] if value.endswith(suffix) else value
+
+
+def domain_paths(cache: Path, domain: str) -> list[str]:
+    name = domain_name(domain)
+    return [
+        path
+        for path in git(cache, "ls-tree", "-r", "--name-only", "HEAD", "--", "domains")
+        .splitlines()
+        if path.startswith("domains/")
+        and path.endswith(".json")
+        and (Path(path).stem == name or Path(path).stem.endswith(f".{name}"))
+    ]
 
 
 def history(cache: Path, domain: str) -> dict[str, Any]:
-    path = domain_path(domain)
-    commits = git(
-        cache,
-        "log",
-        "--follow",
-        "--format=%H%x00%aI%x00%an%x00%ae%x00%s",
-        "--",
-        path,
-    ).splitlines()
-    entries = []
-    for line in commits:
-        commit, authored_at, author, email, subject = line.split("\x00", 4)
-        patch = git(cache, "show", "--format=", "--find-renames", commit, "--", path)
-        entries.append(
-            {
-                "commit": commit,
-                "authored_at": authored_at,
-                "author": author,
-                "email": email,
-                "subject": subject,
-                "patch": patch,
-            }
-        )
-    return {"domain": normalize_domain(domain), "path": path, "commits": entries}
+    paths = domain_paths(cache, domain)
+    files = []
+    for path in paths:
+        commits = git(
+            cache,
+            "log",
+            "--follow",
+            "--format=%H%x00%aI%x00%an%x00%ae%x00%s",
+            "--",
+            path,
+        ).splitlines()
+        entries = []
+        for line in commits:
+            commit, authored_at, author, email, subject = line.split("\x00", 4)
+            patch = git(cache, "show", "--format=", "--find-renames", commit, "--", path)
+            entries.append(
+                {
+                    "commit": commit,
+                    "authored_at": authored_at,
+                    "author": author,
+                    "email": email,
+                    "subject": subject,
+                    "patch": patch,
+                }
+            )
+        files.append({"path": path, "commits": entries})
+    return {"domain": domain_name(domain), "files": files}
 
 
 def domain_files(cache: Path) -> list[str]:
@@ -136,9 +157,11 @@ def main() -> int:
             if args.as_json:
                 print(json.dumps(result, indent=2))
             else:
-                for commit in result["commits"]:
-                    print(f"{commit['commit'][:10]} {commit['authored_at']} {commit['author']}: {commit['subject']}")
-                    print(commit["patch"], end="")
+                for file in result["files"]:
+                    print(file["path"])
+                    for commit in file["commits"]:
+                        print(f"{commit['commit'][:10]} {commit['authored_at']} {commit['author']}: {commit['subject']}")
+                        print(commit["patch"], end="")
         else:
             count = export_history(args.cache, args.output)
             print(f"Wrote {count} domain histories to {args.output}")
