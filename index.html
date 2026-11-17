@@ -31,12 +31,17 @@
     .status { min-height: 1.5rem; color: var(--muted); }
     .error { color: #cf222e; }
     .commit { border: 1px solid var(--border); border-radius: 6px; margin: .75rem 0; overflow: hidden; }
+    .file { border: 1px solid var(--border); border-radius: 6px; margin: .75rem 0; overflow: hidden; }
+    .file h3, .history h2 { margin: 0; padding: .85rem 1rem; }
+    .file h3 { border-bottom: 1px solid var(--border); font: 600 1rem ui-monospace, monospace; }
     .commit-header { align-items: center; display: flex; gap: .75rem; padding: .85rem 1rem; }
     .commit-header button { margin-left: auto; }
     .subject { font-weight: 600; }
     .sha { color: var(--link); font-family: ui-monospace, monospace; text-decoration: none; }
     pre { background: var(--panel); margin: 0; max-height: 32rem; overflow: auto; padding: 1rem; white-space: pre-wrap; }
+    .file pre { max-height: none; }
     .details { border-top: 1px solid var(--border); }
+    .history { margin-top: 2rem; }
   </style>
 </head>
 <body>
@@ -60,6 +65,8 @@
     function normalizeDomain(value) {
       let domain = value.trim().toLowerCase().replace(/^https?:\/\//, "").split("/")[0].replace(/\.$/, "");
       if (!/^[a-z0-9][a-z0-9.-]*$/.test(domain)) throw new Error("Enter a valid domain.");
+      domain = domain.endsWith(".is-a.dev") ? domain.slice(0, -".is-a.dev".length) : domain;
+      if (!domain) throw new Error("Enter a valid domain.");
       return domain;
     }
 
@@ -80,6 +87,17 @@
         commits.push(...batch);
         if (batch.length < 100) return commits;
       }
+    }
+
+    function renderFile(file) {
+      const article = document.createElement("article");
+      article.className = "file";
+      const heading = document.createElement("h3");
+      heading.textContent = file.path;
+      const content = document.createElement("pre");
+      content.textContent = file.content;
+      article.append(heading, content);
+      return article;
     }
 
     function renderCommit(commit, path) {
@@ -137,6 +155,23 @@
       return article;
     }
 
+    async function currentFiles(domain) {
+      const tree = await github(`${API}/git/trees/main?recursive=1`);
+      const paths = (tree.tree || [])
+        .filter(item => item.type === "blob" && item.path.startsWith("domains/") && item.path.endsWith(".json"))
+        .map(item => item.path)
+        .filter(path => {
+          const name = path.slice("domains/".length, -".json".length);
+          return name === domain || name.endsWith(`.${domain}`);
+        });
+      return Promise.all(paths.map(async path => {
+        const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+        const file = await github(`${API}/contents/${encodedPath}?ref=main`);
+        const bytes = Uint8Array.from(atob(file.content.replace(/\s/g, "")), character => character.charCodeAt(0));
+        return { path, content: new TextDecoder().decode(bytes) };
+      }));
+    }
+
     form.addEventListener("submit", async event => {
       event.preventDefault();
       results.replaceChildren();
@@ -144,12 +179,33 @@
       let domain;
       try {
         domain = normalizeDomain(input.value);
-        const path = `domains/${domain}.json`;
+        status.textContent = "Loading current files…";
+        const files = await currentFiles(domain);
+        if (!files.length) throw new Error("No domain files or commits were found.");
+        const filesHeading = document.createElement("h2");
+        filesHeading.textContent = `Current files for ${domain}.is-a.dev`;
+        results.append(filesHeading);
+        files.forEach(file => results.append(renderFile(file)));
+
         status.textContent = "Loading commit history…";
-        const commits = await allCommits(path);
-        status.textContent = `${commits.length} commit${commits.length === 1 ? "" : "s"} for ${domain}`;
-        if (!commits.length) return;
-        commits.forEach(commit => results.append(renderCommit(commit, path)));
+        const histories = await Promise.all(files.map(async file => ({
+          file,
+          commits: await allCommits(file.path),
+        })));
+        const totalCommits = histories.reduce((total, item) => total + item.commits.length, 0);
+        status.textContent = `${totalCommits} file commit${totalCommits === 1 ? "" : "s"} for ${domain}.is-a.dev`;
+        const historySection = document.createElement("section");
+        historySection.className = "history";
+        const historyHeading = document.createElement("h2");
+        historyHeading.textContent = "History";
+        historySection.append(historyHeading);
+        histories.forEach(({ file, commits }) => {
+          const fileHeading = document.createElement("h3");
+          fileHeading.textContent = file.path;
+          historySection.append(fileHeading);
+          commits.forEach(commit => historySection.append(renderCommit(commit, file.path)));
+        });
+        results.append(historySection);
       } catch (error) {
         status.className = "status error";
         status.textContent = error.message;
