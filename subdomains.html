@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>is-a.dev subdomains by owner</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 16px/1.5 system-ui, sans-serif;
+      --bg: #fff;
+      --fg: #24292f;
+      --muted: #57606a;
+      --border: #d0d7de;
+      --panel: #f6f8fa;
+      --link: #0969da;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --border: #30363d; --panel: #161b22; --link: #58a6ff; }
+    }
+    body { background: var(--bg); color: var(--fg); margin: 0; }
+    main { max-width: 900px; margin: 0 auto; padding: 3rem 1rem; }
+    h1 { margin-bottom: .25rem; }
+    .muted, time { color: var(--muted); }
+    a { color: var(--link); }
+    form { display: flex; gap: .5rem; margin: 2rem 0 1rem; }
+    input, button { border: 1px solid var(--border); border-radius: 6px; font: inherit; padding: .6rem .75rem; }
+    input { background: var(--bg); color: var(--fg); flex: 1; min-width: 0; }
+    button { background: var(--panel); color: var(--fg); cursor: pointer; }
+    button[type="submit"] { background: var(--link); border-color: var(--link); color: white; }
+    button:disabled { cursor: wait; opacity: .65; }
+    .status { min-height: 1.5rem; color: var(--muted); }
+    .error { color: #cf222e; }
+    .owner { border: 1px solid var(--border); border-radius: 6px; margin: .75rem 0; overflow: hidden; }
+    .owner h2 { margin: 0; padding: .85rem 1rem; border-bottom: 1px solid var(--border); font: 600 1rem ui-monospace, monospace; }
+    .owner ul { list-style: none; margin: 0; padding: 0; }
+    .owner li { padding: .6rem 1rem; border-top: 1px solid var(--border); }
+    .owner li:first-child { border-top: none; }
+    .domain { font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>is-a.dev subdomains by owner</h1>
+    <p class="muted">Find every subdomain registered to a GitHub username or email in <code>is-a-dev/register</code>. No history, just subdomains.</p>
+    <p class="muted"><a href="index.html">← Domain history</a></p>
+    <form id="search-form">
+      <input id="query" name="query" placeholder="GitHub username or email" autocomplete="off" required>
+      <button type="submit">Search</button>
+    </form>
+    <div id="status" class="status" role="status"></div>
+    <section id="results" aria-live="polite"></section>
+  </main>
+  <script>
+    const DATA_URL = "https://raw.is-a.dev/v2.json";
+    const form = document.querySelector("#search-form");
+    const input = document.querySelector("#query");
+    const status = document.querySelector("#status");
+    const results = document.querySelector("#results");
+    let dataPromise = null;
+
+    function loadData() {
+      if (!dataPromise) {
+        dataPromise = fetch(DATA_URL, { headers: { Accept: "application/json" } }).then(response => {
+          if (!response.ok) throw new Error("Could not load the subdomain registry.");
+          return response.json();
+        });
+      }
+      return dataPromise;
+    }
+
+    function ownerKey(item) {
+      const owner = item.owner || {};
+      return owner.username || owner.github || owner.gitlab || "unknown";
+    }
+
+    function matches(item, query, isEmail) {
+      const owner = item.owner || {};
+      const values = Object.values(owner).filter(value => typeof value === "string");
+      if (isEmail) {
+        return values.some(value => value.toLowerCase().includes(query));
+      }
+      return values.some(value => value.toLowerCase() === query);
+    }
+
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      results.replaceChildren();
+      status.className = "status";
+      const button = form.querySelector("button[type='submit']");
+      button.disabled = true;
+      try {
+        const query = input.value.trim().toLowerCase();
+        if (!query) throw new Error("Enter a GitHub username or email.");
+        status.textContent = "Loading registry…";
+        const data = await loadData();
+        const isEmail = query.includes("@");
+        const found = data.filter(item => matches(item, query, isEmail));
+        if (!found.length) {
+          status.className = "status error";
+          status.textContent = `No subdomains found for ${input.value.trim()}.`;
+          return;
+        }
+
+        const groups = new Map();
+        found.forEach(item => {
+          const key = ownerKey(item);
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(item);
+        });
+
+        const total = found.length;
+        status.textContent = `${total} subdomain${total === 1 ? "" : "s"} found`;
+
+        [...groups.entries()]
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .forEach(([owner, items]) => {
+            const article = document.createElement("article");
+            article.className = "owner";
+            const heading = document.createElement("h2");
+            heading.textContent = `${owner} (${items.length})`;
+            const list = document.createElement("ul");
+            [...items]
+              .sort((a, b) => a.domain.localeCompare(b.domain))
+              .forEach(item => {
+                const li = document.createElement("li");
+                const link = document.createElement("a");
+                link.className = "domain";
+                link.href = `https://${item.domain}`;
+                link.target = "_blank";
+                link.rel = "noopener";
+                link.textContent = item.domain;
+                li.append(link);
+                list.append(li);
+              });
+            article.append(heading, list);
+            results.append(article);
+          });
+      } catch (error) {
+        status.className = "status error";
+        status.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
